@@ -12,7 +12,7 @@ st.title("Perspective is EVERYTHING!")
 summary_placeholder = st.empty()
 
 # --- Metrics Card Section (helper) ---
-def metric_card(title, value, value_color="#e53935"):
+def metric_card(title, value):
     card_html = f"""
     <div style="
         width:100%; max-width:220px; height:220px;
@@ -26,7 +26,7 @@ def metric_card(title, value, value_color="#e53935"):
         <div style="font-size:1.1rem;font-weight:600;color:#3b3c3f;text-align:center;margin-bottom:16px;">
             {title}
         </div>
-        <div style="font-size:2.1rem;font-weight:700;color:{value_color};text-align:center;">
+        <div style="font-size:2.1rem;font-weight:700;color:#1357c6;text-align:center;">
             {value}
         </div>
     </div>
@@ -35,7 +35,6 @@ def metric_card(title, value, value_color="#e53935"):
 
 
 # --- Helper to count large drawdown episodes from a level/index series ---
-
 def count_big_drawdowns_from_level(levels: pd.Series, threshold: float = 0.45) -> int:
     """
     Count distinct peak-to-trough drawdown episodes where drawdown <= -threshold.
@@ -56,19 +55,6 @@ def count_big_drawdowns_from_level(levels: pd.Series, threshold: float = 0.45) -
         if in_event and x >= 0.0:
             in_event = False
     return events
-
-# --- Helper: format days as "X yrs Y mos" (rounded) ---
-def format_days_to_years_months(days: float) -> str:
-    if not pd.notnull(days):
-        return "—"
-    # Convert days to months using 365.25/12 ≈ 30.4375 days per month
-    total_months = int(round(float(days) / 30.4375))
-    years = total_months // 12
-    months = total_months % 12
-    if years > 0:
-        return f"{years} yrs {months} mos"
-    else:
-        return f"{months} mos"
 
 def load_data():
     file_path = "data.xlsx"
@@ -250,65 +236,6 @@ count = len(bear_filtered)
 # Detect and compute decline/unemployment/duration (normalized matching)
 def _norm(s: str) -> str:
     return "".join(ch for ch in str(s).lower() if ch.isalnum())
-
-# Helper: parse candidate datetime column robustly
-def _parse_candidate_datetime(series):
-    # Try Excel serial date first if numeric and values are large
-    if pd.api.types.is_numeric_dtype(series):
-        if series.dropna().gt(1000).mean() > 0.5:
-            return pd.to_datetime(series, origin="1899-12-30", unit="D", errors="coerce")
-    # Otherwise, try normal
-    return pd.to_datetime(series, errors="coerce")
-
-# Robustly find end date column/series for bear/recession tables
-def _find_end_series(bdf: pd.DataFrame, start_col: str, duration_col: str | None):
-    """Return (end_series, end_col_name) using a robust heuristic; fallback to duration if needed.
-    Preference order: explicit End/End Date > Trough/Low date > duration-based.
-    """
-    start = pd.to_datetime(bdf[start_col], errors="coerce")
-
-    # Gather candidate columns that look like end/trough/low date labels
-    candidates: list[tuple[str, str]] = []  # (col_name, normalized)
-    for col in bdf.columns:
-        if col == start_col:
-            continue
-        n = _norm(col)
-        if any(key in n for key in (
-            "end", "ended", "enddate", "endingdate", "end_date",
-            "trough", "troughdate", "lowdate"
-        )):
-            candidates.append((col, n))
-
-    best_col = None
-    best_score = -1.0
-    best_end = None
-    for col, n in candidates:
-        dt = _parse_candidate_datetime(bdf[col])
-        valid = dt.notna().mean()
-        if valid < 0.4:  # require at least some non-nulls
-            continue
-        ge = ((dt >= start) & dt.notna() & start.notna()).mean()
-        score = float(valid) * float(ge)
-        # Prefer explicit end date labels over trough/low
-        if any(k in n for k in ("end", "ended", "enddate", "endingdate", "end_date")):
-            score += 0.25
-        elif any(k in n for k in ("trough", "troughdate", "lowdate")):
-            score += 0.15
-        if score > best_score:
-            best_score = score
-            best_col = col
-            best_end = dt
-
-    # Accept if reasonably good; otherwise fall back to duration
-    if best_end is not None and best_score >= 0.5:
-        return best_end, best_col
-
-    if duration_col is not None and duration_col in bdf.columns:
-        duration_days = pd.to_numeric(bdf[duration_col], errors="coerce")
-        ends = start + pd.to_timedelta(duration_days, unit="D")
-        return ends, None
-
-    return None, None
 norm_map = {col: _norm(col) for col in bear_filtered.columns}
 
 decline_col = None
@@ -337,7 +264,6 @@ if duration_col is not None:
     duration_num = pd.to_numeric(bear_filtered[duration_col], errors="coerce")
     average_duration = duration_num.mean()
 
-
 # Count 45%+ declines directly from the bear table so it matches the visible rows
 big_bear_count = 0
 if decline_col is not None and not bear_filtered.empty:
@@ -348,24 +274,6 @@ if decline_col is not None and not bear_filtered.empty:
     else:
         _threshold = -45.0
     big_bear_count = int((_decline_vals <= _threshold).sum())
-
-# Average number of days between the end of a bear and the start of the next
-avg_days_between_bears = np.nan
-if not bear_filtered.empty:
-    # Start dates are in the detected bear_date_col
-    starts = pd.to_datetime(bear_filtered[bear_date_col], errors="coerce")
-
-    # Use robust end date detection
-    ends, _used_end_col = _find_end_series(bear_filtered, bear_date_col, duration_col)
-
-    if ends is not None:
-        tmp = pd.DataFrame({"start": starts, "end": ends}).dropna().sort_values("start")
-        if len(tmp) >= 2:
-            gaps = (tmp["start"].shift(-1) - tmp["end"]).dt.days[:-1]
-            # Keep only positive gaps (ignore overlaps/negatives)
-            gaps = gaps[gaps > 0]
-            if gaps.size > 0:
-                avg_days_between_bears = float(gaps.mean())
 
 # Recessions
 if recession_df is not None and not recession_df.empty and recession_date_col is not None:
@@ -380,19 +288,19 @@ else:
 if average_decline is not None and average_duration is not None:
     st.markdown("**First the bad news.**\n\n")
     st.markdown("During this period, the following metrics summarize bear markets and recessions.")
-    b1, b2, b3, b4, b5, b6 = st.columns(6)
-    with b1:
+    row1_col1, row1_col2 = st.columns(2)
+    with row1_col1:
         metric_card("Number of Bear Markets", count)
-    with b2:
+    with row1_col2:
         metric_card("Average Bear Market Decline", f"{average_decline*100:.2f}%")
-    with b3:
-        metric_card("Average Bear Market Duration", format_days_to_years_months(average_duration))
-    with b4:
-        metric_card("Number of Recessions during period", recession_count)
-    with b5:
-        metric_card("Number of times SP500 Cut In Half!", f"{big_bear_count}")
-    with b6:
-        metric_card("Avg Time: Prior Bear End to Next Bear Start", format_days_to_years_months(avg_days_between_bears))
+
+    row2_col1, row2_col2, row2_col3 = st.columns(3)
+    with row2_col1:
+        metric_card("Average Bear Market Duration", f"{int(round(average_duration))} days")
+    with row2_col2:
+        metric_card("Number of Recessions", recession_count)
+    with row2_col3:
+        metric_card("# of 50% Declines", f"{big_bear_count}")
 
     # Optional tables (honor user toggles)
     if show_bear_table == "Yes":
@@ -401,35 +309,11 @@ if average_decline is not None and average_duration is not None:
             bear_filtered[decline_col] = pd.to_numeric(bear_filtered[decline_col], errors="coerce")
         if unemp_col is not None:
             bear_filtered[unemp_col] = pd.to_numeric(bear_filtered[unemp_col], errors="coerce")
-
-        # Build a clean display table with explicit Start/End first (use authoritative End column if found)
-        starts = pd.to_datetime(bear_filtered[bear_date_col], errors="coerce")
-        ends, end_col = _find_end_series(bear_filtered, bear_date_col, duration_col)
-        if end_col is not None:
-            end_series = _parse_candidate_datetime(bear_filtered[end_col])
-        else:
-            end_series = ends if ends is not None else pd.Series(pd.NaT, index=bear_filtered.index)
-
-        # Convert to date-only for display (remove 00:00:00 time)
-        start_display = starts.dt.date
-        end_display = end_series.dt.date
-
-        # Exclude the original end column from the remainder to avoid duplicates
-        exclude_cols = {bear_date_col}
-        if end_col is not None:
-            exclude_cols.add(end_col)
-        remainder = [c for c in bear_filtered.columns if c not in exclude_cols]
-
-        display_df = pd.concat([
-            pd.DataFrame({"Start Date": start_display, "End Date": end_display}),
-            bear_filtered[remainder]
-        ], axis=1)
-
-        st.dataframe(display_df)
+        st.dataframe(bear_filtered)
     if show_recession_table == "Yes":
         st.dataframe(recession_filtered)
 
-    st.markdown("***Now the good news...***")
+    st.markdown("**Now the good news...**")
 
 # Composite column calculations and display
 if not filtered_df.empty and "Composite" in filtered_df.columns:
@@ -501,18 +385,21 @@ else:
     withdrawal_fmt = "—"
 withdrawal_label = f"Spending Using {custom_pct:.1f}% Withdrawal Rate"
 st.write('Nominal Data--Assumes no withdrawals, just reinvestment of dividends.')
-# Layout the five metrics in a single row
-m1, m2, m3, m4, m5 = st.columns(5)
-with m1:
-    metric_card("Beginning Investment", beginning_investment_fmt, value_color="#2e7d32")
-with m2:
-    metric_card("Ending Value ", ending_value_fmt, value_color="#2e7d32")
-with m3:
-    metric_card("Compound Annual Growth Rate", cagr_fmt, value_color="#2e7d32")
-with m4:
-    metric_card("Current Dividends on Ending Value", dividends_fmt, value_color="#2e7d32")
-with m5:
-    metric_card(withdrawal_label, withdrawal_fmt, value_color="#2e7d32")
+# Layout the five metrics in two rows using st.columns
+col1, col2, col3 = st.columns(3)
+with col1:
+    metric_card("Beginning Investment", beginning_investment_fmt)
+with col2:
+    metric_card("Ending Value ", ending_value_fmt)
+with col3:
+    metric_card("Compound Annual Growth Rate", cagr_fmt)
+
+row2_col1, row2_col2, row2_col3 = st.columns(3)
+with row2_col1:
+    metric_card("Current Dividends on Ending Value", dividends_fmt)
+# leave the middle column empty for spacing
+with row2_col3:
+    metric_card(withdrawal_label, withdrawal_fmt)
 
 # C CPI column calculations and display (adjusted to detect any CPI column)
 cpi_col = None

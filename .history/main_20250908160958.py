@@ -410,10 +410,6 @@ if average_decline is not None and average_duration is not None:
         else:
             end_series = ends if ends is not None else pd.Series(pd.NaT, index=bear_filtered.index)
 
-        # Convert to date-only for display (remove 00:00:00 time)
-        start_display = starts.dt.date
-        end_display = end_series.dt.date
-
         # Exclude the original end column from the remainder to avoid duplicates
         exclude_cols = {bear_date_col}
         if end_col is not None:
@@ -421,7 +417,7 @@ if average_decline is not None and average_duration is not None:
         remainder = [c for c in bear_filtered.columns if c not in exclude_cols]
 
         display_df = pd.concat([
-            pd.DataFrame({"Start Date": start_display, "End Date": end_display}),
+            pd.DataFrame({"Start Date": starts, "End Date": end_series}),
             bear_filtered[remainder]
         ], axis=1)
 

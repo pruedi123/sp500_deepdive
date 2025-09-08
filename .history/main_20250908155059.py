@@ -12,7 +12,7 @@ st.title("Perspective is EVERYTHING!")
 summary_placeholder = st.empty()
 
 # --- Metrics Card Section (helper) ---
-def metric_card(title, value, value_color="#e53935"):
+def metric_card(title, value):
     card_html = f"""
     <div style="
         width:100%; max-width:220px; height:220px;
@@ -26,7 +26,7 @@ def metric_card(title, value, value_color="#e53935"):
         <div style="font-size:1.1rem;font-weight:600;color:#3b3c3f;text-align:center;margin-bottom:16px;">
             {title}
         </div>
-        <div style="font-size:2.1rem;font-weight:700;color:{value_color};text-align:center;">
+        <div style="font-size:2.1rem;font-weight:700;color:#1357c6;text-align:center;">
             {value}
         </div>
     </div>
@@ -250,65 +250,6 @@ count = len(bear_filtered)
 # Detect and compute decline/unemployment/duration (normalized matching)
 def _norm(s: str) -> str:
     return "".join(ch for ch in str(s).lower() if ch.isalnum())
-
-# Helper: parse candidate datetime column robustly
-def _parse_candidate_datetime(series):
-    # Try Excel serial date first if numeric and values are large
-    if pd.api.types.is_numeric_dtype(series):
-        if series.dropna().gt(1000).mean() > 0.5:
-            return pd.to_datetime(series, origin="1899-12-30", unit="D", errors="coerce")
-    # Otherwise, try normal
-    return pd.to_datetime(series, errors="coerce")
-
-# Robustly find end date column/series for bear/recession tables
-def _find_end_series(bdf: pd.DataFrame, start_col: str, duration_col: str | None):
-    """Return (end_series, end_col_name) using a robust heuristic; fallback to duration if needed.
-    Preference order: explicit End/End Date > Trough/Low date > duration-based.
-    """
-    start = pd.to_datetime(bdf[start_col], errors="coerce")
-
-    # Gather candidate columns that look like end/trough/low date labels
-    candidates: list[tuple[str, str]] = []  # (col_name, normalized)
-    for col in bdf.columns:
-        if col == start_col:
-            continue
-        n = _norm(col)
-        if any(key in n for key in (
-            "end", "ended", "enddate", "endingdate", "end_date",
-            "trough", "troughdate", "lowdate"
-        )):
-            candidates.append((col, n))
-
-    best_col = None
-    best_score = -1.0
-    best_end = None
-    for col, n in candidates:
-        dt = _parse_candidate_datetime(bdf[col])
-        valid = dt.notna().mean()
-        if valid < 0.4:  # require at least some non-nulls
-            continue
-        ge = ((dt >= start) & dt.notna() & start.notna()).mean()
-        score = float(valid) * float(ge)
-        # Prefer explicit end date labels over trough/low
-        if any(k in n for k in ("end", "ended", "enddate", "endingdate", "end_date")):
-            score += 0.25
-        elif any(k in n for k in ("trough", "troughdate", "lowdate")):
-            score += 0.15
-        if score > best_score:
-            best_score = score
-            best_col = col
-            best_end = dt
-
-    # Accept if reasonably good; otherwise fall back to duration
-    if best_end is not None and best_score >= 0.5:
-        return best_end, best_col
-
-    if duration_col is not None and duration_col in bdf.columns:
-        duration_days = pd.to_numeric(bdf[duration_col], errors="coerce")
-        ends = start + pd.to_timedelta(duration_days, unit="D")
-        return ends, None
-
-    return None, None
 norm_map = {col: _norm(col) for col in bear_filtered.columns}
 
 decline_col = None
@@ -355,8 +296,24 @@ if not bear_filtered.empty:
     # Start dates are in the detected bear_date_col
     starts = pd.to_datetime(bear_filtered[bear_date_col], errors="coerce")
 
-    # Use robust end date detection
-    ends, _used_end_col = _find_end_series(bear_filtered, bear_date_col, duration_col)
+    # Try to detect an explicit End-Date column; else derive from duration
+    end_col_candidate = None
+    for col in bear_filtered.columns:
+        n = _norm(col)
+        if any(tok in n for tok in ["end", "ended", "enddate", "to"]):
+            end_col_candidate = col
+            break
+
+    if end_col_candidate is not None:
+        if pd.api.types.is_numeric_dtype(bear_filtered[end_col_candidate]):
+            ends = pd.to_datetime(bear_filtered[end_col_candidate], origin="1899-12-30", unit="D", errors="coerce")
+        else:
+            ends = pd.to_datetime(bear_filtered[end_col_candidate], errors="coerce")
+    elif duration_col is not None:
+        duration_days = pd.to_numeric(bear_filtered[duration_col], errors="coerce")
+        ends = starts + pd.to_timedelta(duration_days, unit="D")
+    else:
+        ends = None
 
     if ends is not None:
         tmp = pd.DataFrame({"start": starts, "end": ends}).dropna().sort_values("start")
@@ -388,11 +345,11 @@ if average_decline is not None and average_duration is not None:
     with b3:
         metric_card("Average Bear Market Duration", format_days_to_years_months(average_duration))
     with b4:
-        metric_card("Number of Recessions during period", recession_count)
+        metric_card("Number of Recessions", recession_count)
     with b5:
-        metric_card("Number of times SP500 Cut In Half!", f"{big_bear_count}")
+        metric_card("45%+ Bear Markets (Table)", f"{big_bear_count}")
     with b6:
-        metric_card("Avg Time: Prior Bear End to Next Bear Start", format_days_to_years_months(avg_days_between_bears))
+        metric_card("Avg Time Between Bears", format_days_to_years_months(avg_days_between_bears))
 
     # Optional tables (honor user toggles)
     if show_bear_table == "Yes":
@@ -401,35 +358,11 @@ if average_decline is not None and average_duration is not None:
             bear_filtered[decline_col] = pd.to_numeric(bear_filtered[decline_col], errors="coerce")
         if unemp_col is not None:
             bear_filtered[unemp_col] = pd.to_numeric(bear_filtered[unemp_col], errors="coerce")
-
-        # Build a clean display table with explicit Start/End first (use authoritative End column if found)
-        starts = pd.to_datetime(bear_filtered[bear_date_col], errors="coerce")
-        ends, end_col = _find_end_series(bear_filtered, bear_date_col, duration_col)
-        if end_col is not None:
-            end_series = _parse_candidate_datetime(bear_filtered[end_col])
-        else:
-            end_series = ends if ends is not None else pd.Series(pd.NaT, index=bear_filtered.index)
-
-        # Convert to date-only for display (remove 00:00:00 time)
-        start_display = starts.dt.date
-        end_display = end_series.dt.date
-
-        # Exclude the original end column from the remainder to avoid duplicates
-        exclude_cols = {bear_date_col}
-        if end_col is not None:
-            exclude_cols.add(end_col)
-        remainder = [c for c in bear_filtered.columns if c not in exclude_cols]
-
-        display_df = pd.concat([
-            pd.DataFrame({"Start Date": start_display, "End Date": end_display}),
-            bear_filtered[remainder]
-        ], axis=1)
-
-        st.dataframe(display_df)
+        st.dataframe(bear_filtered)
     if show_recession_table == "Yes":
         st.dataframe(recession_filtered)
 
-    st.markdown("***Now the good news...***")
+    st.markdown("**Now the good news...**")
 
 # Composite column calculations and display
 if not filtered_df.empty and "Composite" in filtered_df.columns:
@@ -504,15 +437,15 @@ st.write('Nominal Data--Assumes no withdrawals, just reinvestment of dividends.'
 # Layout the five metrics in a single row
 m1, m2, m3, m4, m5 = st.columns(5)
 with m1:
-    metric_card("Beginning Investment", beginning_investment_fmt, value_color="#2e7d32")
+    metric_card("Beginning Investment", beginning_investment_fmt)
 with m2:
-    metric_card("Ending Value ", ending_value_fmt, value_color="#2e7d32")
+    metric_card("Ending Value ", ending_value_fmt)
 with m3:
-    metric_card("Compound Annual Growth Rate", cagr_fmt, value_color="#2e7d32")
+    metric_card("Compound Annual Growth Rate", cagr_fmt)
 with m4:
-    metric_card("Current Dividends on Ending Value", dividends_fmt, value_color="#2e7d32")
+    metric_card("Current Dividends on Ending Value", dividends_fmt)
 with m5:
-    metric_card(withdrawal_label, withdrawal_fmt, value_color="#2e7d32")
+    metric_card(withdrawal_label, withdrawal_fmt)
 
 # C CPI column calculations and display (adjusted to detect any CPI column)
 cpi_col = None
