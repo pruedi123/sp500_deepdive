@@ -452,20 +452,7 @@ if average_decline is not None and average_duration is not None:
 
         st.dataframe(display_df)
     if show_recession_table == "Yes":
-        # Format Decline column as percent if present (handles either fractional or percent-scale inputs)
-        display_recession = recession_filtered.copy()
-        rec_norm_map = {col: _norm(col) for col in display_recession.columns}
-        rec_decline_col = None
-        for col, n in rec_norm_map.items():
-            if any(tok in n for tok in ["decline", "drawdown", "drop", "loss"]):
-                rec_decline_col = col
-                break
-        if rec_decline_col is not None:
-            rec_decline_vals = pd.to_numeric(display_recession[rec_decline_col], errors="coerce")
-            if rec_decline_vals.abs().max() <= 1.0:
-                rec_decline_vals = rec_decline_vals * 100.0
-            display_recession[rec_decline_col] = rec_decline_vals.map(lambda x: f"{x:.1f}%" if pd.notnull(x) else "—")
-        st.dataframe(display_recession)
+        st.dataframe(recession_filtered)
 
     st.markdown("***Now the good news...***")
 
