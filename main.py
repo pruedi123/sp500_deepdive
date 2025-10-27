@@ -212,7 +212,7 @@ else:
 begin_month = st.sidebar.selectbox("Begin Month", months, index=get_default_index(months, 9))
 end_month = st.sidebar.selectbox("End Month", months[::-1], index=get_default_index(months[::-1], 7))
 
-investment_amount = st.sidebar.number_input("Investment Amount", min_value=1000, max_value=100000, step=1000, value=10000)
+investment_amount = st.sidebar.number_input("Investment Amount", min_value=100, max_value=100000, step=10, value=10000)
 
 # Slider to apply a custom percent of Ending Value (0% to 10% in 0.5% steps)
 custom_pct = st.sidebar.slider("Custom % of Ending Value", min_value=0.0, max_value=10.0, value=4.0, step=0.5, format="%.1f%%")
