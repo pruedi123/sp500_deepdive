@@ -661,7 +661,7 @@ def format_label(val):
     if pd.isna(val):
         return ""
     if val >= 10:
-        return f"{int(val)}x"
+        return f"{int(val:2f)}x"
     else:
         return f"{val:.2f}x"
 factors_df["Label"] = factors_df["Factor"].apply(format_label)
