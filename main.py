@@ -660,8 +660,8 @@ factors_df = pd.DataFrame(list(factors_dict.items()), columns=["Category", "Fact
 def format_label(val):
     if pd.isna(val):
         return ""
-    if val >= 10:
-        return f"{int(val:2f)}x"
+    if val >= 10000:
+        return f"{int(val)}x"
     else:
         return f"{val:.2f}x"
 factors_df["Label"] = factors_df["Factor"].apply(format_label)
