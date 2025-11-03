@@ -189,6 +189,11 @@ df["Month"] = df[date_col].dt.month
 df["Date_Display"] = df[date_col].dt.strftime("%b-%y")
 date_display_pos = df.columns.get_loc(date_col) + 1
 df.insert(date_display_pos, "Date_Display", df.pop("Date_Display"))
+df = df.sort_values(date_col).reset_index(drop=True)
+
+cpi_col = next((col for col in df.columns if "cpi" in col.lower()), None)
+if cpi_col is not None:
+    df[cpi_col] = pd.to_numeric(df[cpi_col], errors="coerce")
 
 # Sidebar for filtering
 st.sidebar.header("Filter Data")
@@ -203,6 +208,14 @@ if date_series.empty:
 
 latest_month_end = (date_series.max() + pd.offsets.MonthEnd(0))
 earliest_month_end = (date_series.min() + pd.offsets.MonthEnd(0))
+
+latest_cpi_value = float('nan')
+latest_cpi_date = None
+if cpi_col is not None:
+    valid_cpi = df[[date_col, cpi_col]].dropna()
+    if not valid_cpi.empty:
+        latest_cpi_value = float(valid_cpi.iloc[-1][cpi_col])
+        latest_cpi_date = valid_cpi.iloc[-1][date_col]
 
 preset_options = ["Past 5 Years", "Past 10 Years", "Past 15 Years", "Past 20 Years", "Custom Range"]
 preset_years_map = {
@@ -242,7 +255,13 @@ else:
     end_month = int(latest_month_end.month)
     st.sidebar.write(f"Range captured: {start_month_end.strftime('%b %Y')} - {latest_month_end.strftime('%b %Y')}")
 
-investment_amount = st.sidebar.number_input("Investment Amount", min_value=100, max_value=100000, step=10, value=10000)
+investment_modes = ["Start-period dollars", "Today's dollars (inflation-adjusted)"]
+todays_mode = investment_modes[1]
+investment_mode = st.sidebar.radio("Investment Amount Type", investment_modes, index=0, horizontal=True)
+investment_label = "Investment Amount"
+if investment_mode == todays_mode:
+    investment_label = "Today's Dollars Investment"
+investment_amount_input = st.sidebar.number_input(investment_label, min_value=100, max_value=1000000, step=1000, value=100000)
 
 # Slider to apply a custom percent of Ending Value (0% to 10% in 0.5% steps)
 custom_pct = st.sidebar.slider("Custom % of Ending Value", min_value=0.0, max_value=10.0, value=4.0, step=0.5, format="%.1f%%")
@@ -266,7 +285,33 @@ end_date = pd.Timestamp(end_year, end_month, 1) + pd.offsets.MonthEnd(0)
 date_mask = (df[date_col] >= begin_date) & (df[date_col] <= end_date)
 filtered_df = df[date_mask]
 
+investment_amount = float(investment_amount_input)
+inflation_factor = float('nan')
+if investment_mode == todays_mode:
+    if cpi_col is None:
+        st.sidebar.warning("CPI data unavailable; using start-period dollars.")
+    elif filtered_df.empty:
+        st.sidebar.info("Select a date range to calculate the inflation-adjusted starting amount.")
+    else:
+        cpi_window = filtered_df[[date_col, cpi_col]].dropna()
+        if cpi_window.empty or not pd.notnull(latest_cpi_value) or latest_cpi_value <= 0:
+            st.sidebar.warning("Unable to compute CPI adjustment for the selected range.")
+        else:
+            start_cpi = float(cpi_window.iloc[0][cpi_col])
+            if pd.notnull(start_cpi) and start_cpi > 0:
+                inflation_factor = latest_cpi_value / start_cpi
+                if inflation_factor != 0:
+                    investment_amount = float(investment_amount_input) / inflation_factor
+                    caption_date = latest_cpi_date.strftime("%b %Y") if latest_cpi_date is not None else "latest CPI"
+                    st.sidebar.caption(f"Historical dollars invested: ${investment_amount:,.0f} (CPI through {caption_date}).")
+                else:
+                    st.sidebar.warning("Unable to compute CPI adjustment for the selected range.")
+            else:
+                st.sidebar.warning("Unable to compute CPI adjustment for the selected range.")
+
 st.write(f"Showing data from {begin_year}-{begin_month} to {end_year}-{end_month}")
+if investment_mode == todays_mode and not np.isnan(inflation_factor) and inflation_factor != 0 and not filtered_df.empty:
+    st.caption(f"${investment_amount_input:,.0f} in today's dollars equals ${investment_amount:,.0f} at the period start.")
 
 # --- Compute bear & recession metrics early so cards can render here ---
 # --- Count drawdown episodes ≥ 45% within the selected date range ---
@@ -534,6 +579,9 @@ ending_value = investment_amount * tr_factor
 # Calculate metrics for the cards
 beginning_investment_fmt = f"${investment_amount:,.0f}"
 ending_value_fmt = f"${ending_value:,.0f}"
+beginning_label = "Beginning Investment"
+if investment_mode == todays_mode:
+    beginning_label = "Beginning Investment (Start Dollars)"
 
 # Calculate CAGR (Nominal Total Return)
 if not filtered_df.empty and "Total Return" in filtered_df.columns:
@@ -572,7 +620,7 @@ st.write('Nominal Data--Assumes no withdrawals, just reinvestment of dividends.'
 # Layout the five metrics in a single row
 m1, m2, m3, m4, m5 = st.columns(5)
 with m1:
-    metric_card("Beginning Investment", beginning_investment_fmt, value_color="#2e7d32")
+    metric_card(beginning_label, beginning_investment_fmt, value_color="#2e7d32")
 with m2:
     metric_card("Ending Value ", ending_value_fmt, value_color="#2e7d32")
 with m3:
@@ -583,24 +631,19 @@ with m5:
     metric_card(withdrawal_label, withdrawal_fmt, value_color="#2e7d32")
 
 # C CPI column calculations and display (adjusted to detect any CPI column)
-cpi_col = None
-for col in filtered_df.columns:
-    if "cpi" in col.lower():
-        cpi_col = col
-        break
-
+c_cpi_factor = float('nan')
 if not filtered_df.empty and cpi_col is not None:
-    begin_c_cpi = filtered_df[cpi_col].iloc[0]
-    end_c_cpi = filtered_df[cpi_col].iloc[-1]
-    try:
-        c_cpi_factor = end_c_cpi / begin_c_cpi if begin_c_cpi != 0 else float('nan')
-    except Exception:
-        c_cpi_factor = float('nan')
+    cpi_segment = filtered_df[cpi_col].dropna()
+    if not cpi_segment.empty:
+        begin_c_cpi = cpi_segment.iloc[0]
+        end_c_cpi = cpi_segment.iloc[-1]
+        try:
+            c_cpi_factor = end_c_cpi / begin_c_cpi if begin_c_cpi != 0 else float('nan')
+        except Exception:
+            c_cpi_factor = float('nan')
     # st.write(f"Begin {cpi_col}:", begin_c_cpi)
     # st.write(f"End {cpi_col}:", end_c_cpi)
     # st.write(f"{cpi_col} Factor:", f"{c_cpi_factor:.2f}x")
-else:
-    c_cpi_factor = float('nan')
 
 # Nominal Dividends column calculations and display
 if not filtered_df.empty and "Nominal Dividends" in filtered_df.columns:
