@@ -196,23 +196,51 @@ st.sidebar.header("Filter Data")
 years = sorted(df['Year'].unique())
 months = sorted(df['Month'].unique())
 
+date_series = df[date_col].dropna()
+if date_series.empty:
+    st.error("No valid dates available in the dataset.")
+    st.stop()
+
+latest_month_end = (date_series.max() + pd.offsets.MonthEnd(0))
+earliest_month_end = (date_series.min() + pd.offsets.MonthEnd(0))
+
+preset_options = ["Past 5 Years", "Past 10 Years", "Past 15 Years", "Past 20 Years", "Custom Range"]
+preset_years_map = {
+    "Past 5 Years": 5,
+    "Past 10 Years": 10,
+    "Past 15 Years": 15,
+    "Past 20 Years": 20,
+}
+
 def get_default_index(values, default_value):
     try:
         return values.index(default_value)
     except ValueError:
         return 0
 
- # Let the user choose how to enter years (dropdown or typed number)
-year_input_mode = st.sidebar.radio("Year input mode", ["Dropdown", "Type a number"], index=0, horizontal=True)
-if year_input_mode == "Dropdown":
-    begin_year = st.sidebar.selectbox("Begin Year", years, index=get_default_index(years, 1945))
-    end_year = st.sidebar.selectbox("End Year", years[::-1], index=get_default_index(years[::-1], 2025))
-else:
-    begin_year = st.sidebar.number_input("Begin Year", min_value=int(min(years)), max_value=int(max(years)), value=2000, step=1)
-    end_year = st.sidebar.number_input("End Year", min_value=int(min(years)), max_value=int(max(years)), value=2025, step=1)
+selected_preset = st.sidebar.selectbox("Date Range", preset_options, index=0)
 
-begin_month = st.sidebar.selectbox("Begin Month", months, index=get_default_index(months, 9))
-end_month = st.sidebar.selectbox("End Month", months[::-1], index=get_default_index(months[::-1], 7))
+if selected_preset == "Custom Range":
+    # Let the user choose how to enter years (dropdown or typed number)
+    year_input_mode = st.sidebar.radio("Year input mode", ["Dropdown", "Type a number"], index=0, horizontal=True)
+    if year_input_mode == "Dropdown":
+        begin_year = st.sidebar.selectbox("Begin Year", years, index=get_default_index(years, 1945))
+        end_year = st.sidebar.selectbox("End Year", years[::-1], index=get_default_index(years[::-1], 2025))
+    else:
+        begin_year = st.sidebar.number_input("Begin Year", min_value=int(min(years)), max_value=int(max(years)), value=2000, step=1)
+        end_year = st.sidebar.number_input("End Year", min_value=int(min(years)), max_value=int(max(years)), value=2025, step=1)
+
+    begin_month = st.sidebar.selectbox("Begin Month", months, index=get_default_index(months, 9))
+    end_month = st.sidebar.selectbox("End Month", months[::-1], index=get_default_index(months[::-1], 7))
+else:
+    years_back = preset_years_map[selected_preset]
+    start_candidate = latest_month_end - pd.DateOffset(years=years_back) + pd.DateOffset(months=1)
+    start_month_end = max(start_candidate, earliest_month_end)
+    begin_year = int(start_month_end.year)
+    begin_month = int(start_month_end.month)
+    end_year = int(latest_month_end.year)
+    end_month = int(latest_month_end.month)
+    st.sidebar.write(f"Range captured: {start_month_end.strftime('%b %Y')} - {latest_month_end.strftime('%b %Y')}")
 
 investment_amount = st.sidebar.number_input("Investment Amount", min_value=100, max_value=100000, step=10, value=10000)
 
